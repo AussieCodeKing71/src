@@ -3071,3 +3071,82 @@ ip6_optlen(struct inpcb *in6p)
 	return len;
 #undef elen
 }
+
+int
+ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short ifidx)
+{
+	struct sockaddr_in6 *sa6;
+	struct m_tag *fwd_tag;
+
+	(void)ifidx;	/* XXX: store after dst, or make struct? */
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+		m_tag_unlink(m, fwd_tag);
+	} else {
+		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*dst),
+		    M_NOWAIT);
+		if (fwd_tag == NULL) {
+			/* XXX what to return? */
+			return 1;
+		}
+	}
+
+	sa6 = (struct sockaddr_in6 *)(fwd_tag+1);
+
+	bcopy(dst, sa6, sizeof(*dst));
+
+	/*
+	 * If nh6 address is link-local we should convert
+	 * it to kernel internal form before doing any
+	 * comparisons.
+	 */
+	if (sa6_embedscope(sa6, V_ip6_use_defzone) != 0) {
+	        m_tag_free(fwd_tag);
+		/* XXX what to return? */
+		return 1;
+	}
+
+	if (in6_localip(&sa6->sin6_addr))
+		m->m_flags |= M_FASTFWD_OURS;
+	else
+		m->m_flags &= ~M_FASTFWD_OURS;
+
+	m->m_flags |= M_IP6_NEXTHOP;
+
+	m_tag_prepend(m, fwd_tag);
+
+	return 0;
+}
+
+int
+ip6_get_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short *ifidx)
+{
+	struct m_tag *fwd_tag;
+
+	memset(dst, 0, sizeof(*dst));
+	*ifidx = 0;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag == NULL) {
+		/* XXX what to return? */
+		return 1;
+	}
+
+	bcopy((fwd_tag+1), dst, sizeof(*dst));
+	/* XXX ifidx is not yet defined */
+
+	return 0;
+}
+
+void
+ip6_flush_fwdtag(struct mbuf *m)
+{
+	struct m_tag *fwd_tag;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+	    m->m_flags &= ~(M_IP6_NEXTHOP | M_FASTFWD_OURS);
+	    m_tag_delete(m, fwd_tag);
+	}
+}

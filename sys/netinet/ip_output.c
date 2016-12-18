@@ -1420,6 +1420,7 @@ ip_mloopback(struct ifnet *ifp, const struct mbuf *m, int hlen)
 int
 ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
 {
+	struct sockaddr_in *sa;
 	struct m_tag *fwd_tag;
 
 	(void)ifidx;	/* XXX: store after dst, or make struct? */
@@ -1432,12 +1433,19 @@ ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
 		    M_NOWAIT);
 		if (fwd_tag == NULL) {
 			/* XXX what to return? */
-			return 0;
+			return 1;
 		}
 	}
 
-	bcopy(dst, (fwd_tag+1), sizeof(*dst));
+	sa = (struct sockaddr_in *)(fwd_tag+1);
+
+	bcopy(dst, sa, sizeof(*dst));
 	m->m_flags |= M_IP_NEXTHOP;
+
+	if (in_localip(sa->sin_addr))
+		m->m_flags |= M_FASTFWD_OURS;
+	else
+		m->m_flags &= ~M_FASTFWD_OURS;
 
 	m_tag_prepend(m, fwd_tag);
 
@@ -1471,7 +1479,7 @@ ip_flush_fwdtag(struct mbuf *m)
 
 	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
 	if (fwd_tag != NULL) {
-	    m->m_flags &= ~M_IP_NEXTHOP;
+	    m->m_flags &= ~(M_IP_NEXTHOP | M_FASTFWD_OURS);
 	    m_tag_delete(m, fwd_tag);
 	}
 }
