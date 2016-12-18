@@ -181,14 +181,9 @@ ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, struct inpcb *inp,
 		return 1; /* Finished */
 	}
 	/* Or forward to some other address? */
-	if (IP_HAS_NEXTHOP(m)) {
-		u_short ifidx;
-
-		ip_get_fwdtag(m, dst, &ifidx);
-		ip_flush_fwdtag(m);
-
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, NULL)) {
 		m->m_flags |= M_SKIP_FIREWALL;
-
+		ip_flush_fwdtag(m);
 		return -1; /* Reloop for CHANGE of dst */
 	}
 
@@ -1457,17 +1452,19 @@ ip_get_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short *ifidx)
 {
 	struct m_tag *fwd_tag;
 
-	memset(dst, 0, sizeof(*dst));
-	*ifidx = 0;
-
 	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
 	if (fwd_tag == NULL) {
 		/* XXX what to return? */
 		return 1;
 	}
 
-	bcopy((fwd_tag+1), dst, sizeof(*dst));
-	/* XXX ifidx is not yet defined */
+	if (dst != NULL) {
+		bcopy((fwd_tag+1), dst, sizeof(*dst));
+	}
+
+	if (ifidx != NULL) {
+		/* XXX ifidx is not yet defined */
+	}
 
 	return 0;
 }

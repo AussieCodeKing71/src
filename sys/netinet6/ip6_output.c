@@ -320,8 +320,8 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 	int hdrsplit = 0;
 	int sw_csum, tso;
 	int needfiblookup;
+	int has_fwd_tag = 0;
 	uint32_t fibnum;
-	struct m_tag *fwd_tag = NULL;
 	uint32_t id;
 
 	if (inp != NULL) {
@@ -545,13 +545,13 @@ again:
 		ro->ro_dst.sin6_family = AF_INET6;
 		RT_VALIDATE((struct route *)ro, &inp->inp_rt_cookie, fibnum);
 	}
-	if (ro->ro_rt && fwd_tag == NULL && (ro->ro_rt->rt_flags & RTF_UP) &&
+	if (ro->ro_rt && has_fwd_tag && (ro->ro_rt->rt_flags & RTF_UP) &&
 	    ro->ro_dst.sin6_family == AF_INET6 &&
 	    IN6_ARE_ADDR_EQUAL(&ro->ro_dst.sin6_addr, &ip6->ip6_dst)) {
 		rt = ro->ro_rt;
 		ifp = ro->ro_rt->rt_ifp;
 	} else {
-		if (fwd_tag == NULL) {
+		if (has_fwd_tag) {
 			bzero(&dst_sa, sizeof(dst_sa));
 			dst_sa.sin6_family = AF_INET6;
 			dst_sa.sin6_len = sizeof(dst_sa);
@@ -849,13 +849,11 @@ again:
 		goto done;
 	}
 	/* Or forward to some other address? */
-	if ((m->m_flags & M_IP6_NEXTHOP) &&
-	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
+	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst_sa, NULL)) {
 		dst = (struct sockaddr_in6 *)&ro->ro_dst;
-		bcopy((fwd_tag+1), &dst_sa, sizeof(struct sockaddr_in6));
 		m->m_flags |= M_SKIP_FIREWALL;
-		m->m_flags &= ~M_IP6_NEXTHOP;
-		m_tag_delete(m, fwd_tag);
+		ip6_flush_fwdtag(m);
+		has_fwd_tag = 1;
 		goto again;
 	}
 
@@ -3124,17 +3122,19 @@ ip6_get_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short *ifidx)
 {
 	struct m_tag *fwd_tag;
 
-	memset(dst, 0, sizeof(*dst));
-	*ifidx = 0;
-
 	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
 	if (fwd_tag == NULL) {
 		/* XXX what to return? */
 		return 1;
 	}
 
-	bcopy((fwd_tag+1), dst, sizeof(*dst));
-	/* XXX ifidx is not yet defined */
+	if (dst != NULL) {
+		bcopy((fwd_tag+1), dst, sizeof(*dst));
+	}
+
+	if (ifidx != NULL) {
+		/* XXX ifidx is not yet defined */
+	}
 
 	return 0;
 }
