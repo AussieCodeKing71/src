@@ -108,7 +108,6 @@ static inline int
 ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, struct inpcb *inp,
     struct sockaddr_in *dst, int *fibnum, int *error)
 {
-	struct m_tag *fwd_tag = NULL;
 	struct mbuf *m;
 	struct in_addr odst;
 	struct ip *ip;
@@ -182,12 +181,13 @@ ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, struct inpcb *inp,
 		return 1; /* Finished */
 	}
 	/* Or forward to some other address? */
-	if ((m->m_flags & M_IP_NEXTHOP) &&
-	    ((fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL)) {
-		bcopy((fwd_tag+1), dst, sizeof(struct sockaddr_in));
+	if (IP_HAS_NEXTHOP(m)) {
+		u_short ifidx;
+
+		ip_get_fwdtag(m, dst, &ifidx);
+		ip_flush_fwdtag(m);
+
 		m->m_flags |= M_SKIP_FIREWALL;
-		m->m_flags &= ~M_IP_NEXTHOP;
-		m_tag_delete(m, fwd_tag);
 
 		return -1; /* Reloop for CHANGE of dst */
 	}
@@ -1414,5 +1414,64 @@ ip_mloopback(struct ifnet *ifp, const struct mbuf *m, int hlen)
 		ip->ip_sum = 0;
 		ip->ip_sum = in_cksum(copym, hlen);
 		if_simloop(ifp, copym, AF_INET, 0);
+	}
+}
+
+int
+ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
+{
+	struct m_tag *fwd_tag;
+
+	(void)ifidx;	/* XXX: store after dst, or make struct? */
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+		m_tag_unlink(m, fwd_tag);
+	} else {
+		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*dst),
+		    M_NOWAIT);
+		if (fwd_tag == NULL) {
+			/* XXX what to return? */
+			return 0;
+		}
+	}
+
+	bcopy(dst, (fwd_tag+1), sizeof(*dst));
+	m->m_flags |= M_IP_NEXTHOP;
+
+	m_tag_prepend(m, fwd_tag);
+
+	return 0;
+}
+
+int
+ip_get_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short *ifidx)
+{
+	struct m_tag *fwd_tag;
+
+	memset(dst, 0, sizeof(*dst));
+	*ifidx = 0;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag == NULL) {
+		/* XXX what to return? */
+		return 1;
+	}
+
+	bcopy((fwd_tag+1), dst, sizeof(*dst));
+	/* XXX ifidx is not yet defined */
+
+	return 0;
+}
+
+void
+ip_flush_fwdtag(struct mbuf *m)
+{
+	struct m_tag *fwd_tag;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+	    m->m_flags &= ~M_IP_NEXTHOP;
+	    m_tag_delete(m, fwd_tag);
 	}
 }

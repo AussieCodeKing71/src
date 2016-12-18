@@ -165,8 +165,10 @@ again:
 		ret = EACCES;
 #else
 	    {
+#ifdef INET6
 		struct m_tag *fwd_tag;
 		size_t len;
+#endif
 
 		KASSERT(args.next_hop == NULL || args.next_hop6 == NULL,
 		    ("%s: both next_hop=%p and next_hop6=%p not NULL", __func__,
@@ -174,11 +176,6 @@ again:
 #ifdef INET6
 		if (args.next_hop6 != NULL)
 			len = sizeof(struct sockaddr_in6);
-#endif
-#ifdef INET
-		if (args.next_hop != NULL)
-			len = sizeof(struct sockaddr_in);
-#endif
 
 		/* Incoming packets should not be tagged so we do not
 		 * m_tag_find. Outgoing packets may be tagged, so we
@@ -196,7 +193,6 @@ again:
 				break; /* i.e. drop */
 			}
 		}
-#ifdef INET6
 		if (args.next_hop6 != NULL) {
 			struct sockaddr_in6 *sa6;
 
@@ -215,16 +211,17 @@ again:
 				(*m0)->m_flags |= M_FASTFWD_OURS;
 			(*m0)->m_flags |= M_IP6_NEXTHOP;
 		}
+		m_tag_prepend(*m0, fwd_tag);
 #endif
 #ifdef INET
 		if (args.next_hop != NULL) {
-			bcopy(args.next_hop, (fwd_tag+1), len);
+			ip_set_fwdtag(*m0, args.next_hop, 0);
 			if (in_localip(args.next_hop->sin_addr))
 				(*m0)->m_flags |= M_FASTFWD_OURS;
-			(*m0)->m_flags |= M_IP_NEXTHOP;
+			else
+				(*m0)->m_flags &= ~M_FASTFWD_OURS;
 		}
 #endif
-		m_tag_prepend(*m0, fwd_tag);
 	    }
 #endif /* INET || INET6 */
 		break;
